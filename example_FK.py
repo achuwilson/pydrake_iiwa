@@ -3,15 +3,16 @@
 # while printing out the end effector position
 # using forward kinematics
 from pydrake.manipulation.simple_ui import JointSliders
-from pydrake.systems.framework import DiagramBuilder, LeafSystem, 
-        BasicVector, PublishEvent, TriggerType
+from pydrake.systems.framework import (DiagramBuilder, 
+    LeafSystem, BasicVector, PublishEvent, TriggerType)
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.primitives import FirstOrderLowPassFilter
-from iiwa_hardware_interface import IiwaHardwareInterface
+from iiwa_manipulation_station import IiwaManipulationStation
 import numpy as np
 import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
 import matplotlib as mpl
+from pydrake.all import GenerateHtml
 mpl.rcParams['figure.dpi'] = 1200    
 import time
 import lcm
@@ -36,34 +37,55 @@ subscription = lcm_subscriptor("IIWA_STATUS",lcmt_iiwa_status,lc)
 lc.handle()
 
 class forwardkin(LeafSystem):
+    # This system has to be initialized with a multibodyplant
+    # it has a single input and prints the End Effector XYZ 
+    # position into terminal
     def __init__(self,plant):
         LeafSystem.__init__(self)
+        self.set_name('FKPlant')
         self._plant =  plant
         self.plant_context = plant.CreateDefaultContext()
-        #self._iiwa = plant.GetModelInstanceByName("iiwa")
-        self._G = plant.GetBodyByName("iiwa_link_7")#.body_frame()
+        #Get the handler for the last link. Replace with gripper/custom 
+        # end effector if required
+        self._G = plant.GetBodyByName("iiwa_link_7")
         self._W = plant.world_frame()
-        #print("Plant ", help(plant))
+        
+        self.input_port = self.DeclareVectorInputPort("iiwa_position_in", 
+                                                    BasicVector(7))
 
-        self.input_port = self.DeclareVectorInputPort("iiwa_position_in", BasicVector(7))
-        self.DeclarePeriodicEvent(period_sec =1.0/2000,offset_sec=0.010,event=PublishEvent(trigger_type=TriggerType.kPeriodic,callback=self._periodic_update))
+        #declare a periodic update event. This will call the function 
+        # _periodic_update at 200 Hz
+        self.DeclarePeriodicEvent(period_sec =1.0/200,
+                                    offset_sec=0.010,
+                                    event=PublishEvent(
+                                        trigger_type=TriggerType.kPeriodic,
+                                    callback=self._periodic_update))
 
     def _periodic_update(self, context, event):
+        # This function will be called at the rat6e specified in
+        # DeclarePeriodicEvent
+        #
+        # evaluate the input_port and get the joint position values
         msg = self.input_port.Eval(context)
-        plant_context = self._plant.CreateDefaultContext()
-        self._plant.SetPositions(plant_context, msg)
-        gpos = self._plant.EvalBodyPoseInWorld(plant_context, self._G)
-        print("Gripper Pos ", gpos.translation())
+        # update the joint position values of the multibodyplant
+        self._plant.SetPositions(self.plant_context, msg)
+        # evaluate the end effector position
+        eepos = self._plant.EvalBodyPoseInWorld(self.plant_context, self._G)
+        # print the XYZ translation estimated. The rotation is available 
+        # using eepos.rotation() - as rotation matrix
+        print("Gripper Pos ", eepos.translation())
 
 
 
 def main():
     builder = DiagramBuilder()
-
-    station = builder.AddSystem(IiwaHardwareInterface())
+    ########### ADD SYSTEMS ############
+    station = builder.AddSystem(IiwaManipulationStation())  
+    station.Finalize()
     station.Connect()
-    
-    teleop = builder.AddSystem(JointSliders(station.get_controller_plant(),length=800))
+
+    teleop = builder.AddSystem(JointSliders(station.get_controller_plant(),
+                length=800))
 
     num_iiwa_joints = station.num_iiwa_joints()
     filter = builder.AddSystem(FirstOrderLowPassFilter(
@@ -71,19 +93,25 @@ def main():
 
     fkinsys = builder.AddSystem(forwardkin(station.get_controller_plant())) 
 
+    ########### CONNECT THE PORTS ###########
     builder.Connect(teleop.get_output_port(0), 
                             filter.get_input_port(0))
     builder.Connect(filter.get_output_port(0),
                             station.GetInputPort("iiwa_position"))
-    builder.Connect(station.GetOutputPort("iiwa_position_measured"), fkinsys.GetInputPort("iiwa_position_in"))                        
+    builder.Connect(station.GetOutputPort("iiwa_position_measured"), 
+                            fkinsys.GetInputPort("iiwa_position_in"))                        
 
+    ########### BUILD ##############
     diagram = builder.Build()
 
+    ########### PLOT #############
     plot_diagram = False
     if(plot_diagram ==True):
         img = plot_system_graphviz(diagram)
+        plt.savefig("images/fk_system.png")
         plt.show()
 
+    ######### SET INITIAL CONDITIONS ##########
     simulator = Simulator(diagram)
 
     # This is important to avoid duplicate publishes to the hardware interface:
@@ -98,7 +126,7 @@ def main():
     #query the initial position from hardware
     lc.handle()
     initPos= subscription.msg.joint_position_measured
-    print("InitPos ", initPos)
+  
     #set the initial values of the filter output
     filter.set_initial_output_value(
         diagram.GetMutableSubsystemContext(
@@ -107,6 +135,8 @@ def main():
     teleop.set_position(list(initPos))
 
     simulator.set_target_realtime_rate(1.0)
+
+    ######## SIMULATE ################
     simulator.AdvanceTo(np.inf)
 
 if __name__ == '__main__':
