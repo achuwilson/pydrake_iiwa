@@ -11,7 +11,7 @@ from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
 from pydrake.manipulation.planner import (
     DifferentialInverseKinematicsParameters)
 
-from pydrake.all import SystemSliders, PortDataType,JacobianWrtVariable
+from pydrake.all import SystemSliders, PortDataType,JacobianWrtVariable,Parser
 from pydrake.math import RigidTransform, RollPitchYaw, RotationMatrix
 from differential_ik import DifferentialIK
 
@@ -183,7 +183,7 @@ class ffcontrol(LeafSystem):
         self._plant =  plant
         self.plant_context = plant.CreateDefaultContext()
         #self._iiwa = plant.GetModelInstanceByName("iiwa")
-        self._G = plant.GetBodyByName("iiwa_link_7")#.body_frame()
+        self._G = plant.GetBodyByName("tip")#.body_frame()
         self._W = plant.world_frame()
         #print("Plant ", help(plant))
 
@@ -221,6 +221,10 @@ class PrintPlant(LeafSystem):
 def main():
     builder = DiagramBuilder()
     station = builder.AddSystem(IiwaHardwareInterface())
+    robot = station.get_controller_plant()
+    finger = Parser(robot).AddModelFromFile("models/onefinger.urdf", "simplefinger")
+    X_7G = RigidTransform(RollPitchYaw(0, 0, 0), [0, 0, 0.045])
+    robot.WeldFrames(robot.GetFrameByName("iiwa_link_7"),robot.GetFrameByName("finger_base", finger), X_7G)
     station.Finalize()
     station.Connect()
 
@@ -230,7 +234,7 @@ def main():
     sliders = SystemSliders(port_size=6,
                     slider_names=["r", "p", "y","x", "y", "z"], lower_limit=-10,
                     upper_limit=10, resolution=0.001,
-                    update_period_sec=0.005, title='test',
+                    update_period_sec=0.005, title='Feed Forward Force',
                     length=800)
     slider_sys = builder.AddSystem(sliders)
     #print_sys = builder.AddSystem(PrintPlant(num_input = 6))
@@ -250,7 +254,7 @@ def main():
     params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
                                          factor*iiwa14_velocity_limits))
     differential_ik = builder.AddSystem(DifferentialIK(robot,
-                robot.GetFrameByName("iiwa_link_7"), params, time_step))
+                robot.GetFrameByName("tip"), params, time_step))
 
     builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
                     station.GetInputPort("iiwa_position"))

@@ -10,8 +10,13 @@ import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
 from pydrake.manipulation.planner import (
     DifferentialInverseKinematicsParameters)
+from pydrake.geometry import ConnectDrakeVisualizer, SceneGraph,DrakeVisualizer
+from pydrake.systems.meshcat_visualizer import MeshcatVisualizer
+from pydrake.systems.planar_scenegraph_visualizer import (
+    PlanarSceneGraphVisualizer
+)
+from pydrake.systems.rendering import MultibodyPositionToGeometryPose
 
-from pydrake.all import SystemSliders, PortDataType,JacobianWrtVariable
 from pydrake.math import RigidTransform, RollPitchYaw, RotationMatrix
 from differential_ik import DifferentialIK
 
@@ -177,66 +182,20 @@ class EndEffectorTeleop(LeafSystem):
         output.SetAtIndex(4, self.y.get())
         output.SetAtIndex(5, self.z.get())
 
-class ffcontrol(LeafSystem):
-    def __init__(self, plant):
-        LeafSystem.__init__(self)
-        self._plant =  plant
-        self.plant_context = plant.CreateDefaultContext()
-        #self._iiwa = plant.GetModelInstanceByName("iiwa")
-        self._G = plant.GetBodyByName("iiwa_link_7")#.body_frame()
-        self._W = plant.world_frame()
-        #print("Plant ", help(plant))
-
-        self.input_port = self.DeclareVectorInputPort("iiwa_position_in", BasicVector(7))
-        self.input_port2 = self.DeclareVectorInputPort("cartforce_in", BasicVector(6))
-        self.output_port =self.DeclareVectorOutputPort("torque_commanded", BasicVector(7), self.CopyStateOut1)
-        print("FFCONTROL INIT")
-
-    def CopyStateOut1(self,context,output):
-        pos_ = self.input_port.Eval(context)
-        force_ =self.input_port2.Eval(context)
-        plant_context = self._plant.CreateDefaultContext()
-        self._plant.SetPositions(plant_context, pos_)
-        J = self._plant.CalcJacobianSpatialVelocity(plant_context,JacobianWrtVariable.kQDot,self._G.body_frame(),[0,0,0],self._W, self._W)
-        
-        torques  = np.dot(J.T,force_)
-        print("torques ", torques)
-        output.SetFromVector(torques)
-
-#define a plant which will just print the data coming into the input port
-class PrintPlant(LeafSystem):
-    def __init__(self, num_input = 1):
-        LeafSystem.__init__(self)
-        self.set_name('PrintPlant')
-        self.input_port = self.DeclareInputPort(
-            "print_in", PortDataType.kVectorValued, num_input)
-
-        #The periodic event starts at a small offset, so that we already have a couple of message already at the input port 
-        self.DeclarePeriodicEvent(period_sec =1.0/100,offset_sec=0.00,event=PublishEvent(trigger_type=TriggerType.kPeriodic,callback=self._periodic_update))
-    def _periodic_update(self, context, event):
-        #read data from the input port
-        msg = self.input_port.Eval(context)
-        print(msg)
-
 def main():
     builder = DiagramBuilder()
-    station = builder.AddSystem(IiwaHardwareInterface())
+    scene_graph = builder.AddSystem(SceneGraph())
+    station = builder.AddSystem(IiwaHardwareInterface(scene_graph))
+    
+    robot = station.get_controller_plant()
     station.Finalize()
+    
     station.Connect()
 
-    robot = station.get_controller_plant()
-    params =  DifferentialInverseKinematicsParameters(7,7)
+    
+    params =  DifferentialInverseKinematicsParameters(7,7
+                                                     )
 
-    sliders = SystemSliders(port_size=6,
-                    slider_names=["r", "p", "y","x", "y", "z"], lower_limit=-10,
-                    upper_limit=10, resolution=0.001,
-                    update_period_sec=0.005, title='test',
-                    length=800)
-    slider_sys = builder.AddSystem(sliders)
-    #print_sys = builder.AddSystem(PrintPlant(num_input = 6))
-    print("DONE SLIDES")
-    ff_sys = builder.AddSystem(ffcontrol(station.get_controller_plant())) 
-    print("FFCONTROL DONE")
     time_step = 0.005
     params.set_timestep(time_step)
     #True velocity limits for IIWA14 in radians
@@ -262,13 +221,35 @@ def main():
     builder.Connect(filter.get_output_port(0),
                     differential_ik.GetInputPort("rpy_xyz_desired"))
 
-    builder.Connect(slider_sys.get_output_port(0),ff_sys.GetInputPort("cartforce_in"))  
-    builder.Connect(station.GetOutputPort("iiwa_position_measured"),ff_sys.GetInputPort("iiwa_position_in")) 
-    builder.Connect(ff_sys.GetOutputPort("torque_commanded"), station.GetInputPort("iiwa_feedforward_torque"))     
-    #builder.Connect(slider_sys.get_output_port(0),print_sys.GetInputPort("print_in"))          
+
+    to_pose = builder.AddSystem(MultibodyPositionToGeometryPose(robot))
+    builder.Connect(station.GetOutputPort("iiwa_position_measured"), to_pose.get_input_port())
+    
+    print("GET SOURCE ID ", robot.get_source_id())
+    builder.Connect(
+        to_pose.get_output_port(),
+        scene_graph.get_source_pose_port(robot.get_source_id()))
+
+   
+
+    DrakeVisualizer.AddToBuilder(builder=builder, scene_graph=scene_graph)  
+    
+    meshcat_viz = builder.AddSystem(
+            MeshcatVisualizer(scene_graph))
+    builder.Connect(
+            scene_graph.get_query_output_port(),
+            meshcat_viz.get_geometry_query_input_port())        
 
     diagram = builder.Build()
     simulator = Simulator(diagram)
+
+    plot_diagram = True
+    if(plot_diagram ==True):
+        img = plot_system_graphviz(diagram)
+        plt.savefig("system.svg")
+        plt.savefig("system.png")
+        plt.show()
+    
 
     # This is important to avoid duplicate publishes to the hardware interface:
     simulator.set_publish_every_time_step(False)
@@ -276,8 +257,9 @@ def main():
     station_context = diagram.GetMutableSubsystemContext(
         station, simulator.get_mutable_context())
 
-    #station.GetInputPort("iiwa_feedforward_torque").FixValue(
-    #    station_context, np.zeros(7))
+    station.GetInputPort("iiwa_feedforward_torque").FixValue(
+        station_context, np.zeros(7))
+
 
     #get the initial values from he hardware
     lc.handle()

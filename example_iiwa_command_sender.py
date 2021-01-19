@@ -13,7 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
 import matplotlib as mpl
-mpl.rcParams['figure.dpi'] = 1200
+mpl.rcParams['figure.dpi'] = 600
 
 
 lcm = DrakeLcm()

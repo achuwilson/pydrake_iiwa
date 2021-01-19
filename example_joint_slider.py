@@ -34,6 +34,7 @@ def main():
     builder = DiagramBuilder()
 
     station = builder.AddSystem(IiwaHardwareInterface())
+    station.Finalize()
     station.Connect()
     
     teleop = builder.AddSystem(JointSliders(station.get_controller_plant(),length=800))
@@ -46,7 +47,7 @@ def main():
                             filter.get_input_port(0))
     builder.Connect(filter.get_output_port(0),
                             station.GetInputPort("iiwa_position"))
-
+    
     diagram = builder.Build()
 
     plot_diagram = False

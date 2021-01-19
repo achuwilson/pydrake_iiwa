@@ -65,6 +65,7 @@ def main():
     builder = DiagramBuilder()
 
     station = builder.AddSystem(IiwaHardwareInterface())
+    station.Finalize()
     station.Connect()
     
     teleop = builder.AddSystem(JointSliders(station.get_controller_plant(),length=800))

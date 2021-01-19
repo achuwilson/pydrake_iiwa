@@ -1,7 +1,10 @@
 #!/usr/bin/python3
-#Control the kuka iiwa joints through sliders, while printing out the end effector position
+# Control the kuka iiwa joints through sliders, 
+# while printing out the end effector position
+# using forward kinematics
 from pydrake.manipulation.simple_ui import JointSliders
-from pydrake.systems.framework import DiagramBuilder, LeafSystem, BasicVector, PublishEvent, TriggerType
+from pydrake.systems.framework import DiagramBuilder, LeafSystem, 
+        BasicVector, PublishEvent, TriggerType
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.primitives import FirstOrderLowPassFilter
 from iiwa_hardware_interface import IiwaHardwareInterface
@@ -14,9 +17,11 @@ import time
 import lcm
 from drake import lcmt_iiwa_status
 
+#initiate the LCM instance
 lc = lcm.LCM()
 
 #this is used to subscribe to LCM mesages
+#so as to 
 class lcm_subscriptor(object):
     def __init__(self, channel, lcm_type, lc):
         self.subscriptor = lc.subscribe(channel,self._msg_handle)

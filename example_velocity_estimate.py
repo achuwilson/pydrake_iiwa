@@ -10,8 +10,7 @@ import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
 from pydrake.manipulation.planner import (
     DifferentialInverseKinematicsParameters)
-
-from pydrake.all import SystemSliders, PortDataType,JacobianWrtVariable
+from pydrake.all import JacobianWrtVariable
 from pydrake.math import RigidTransform, RollPitchYaw, RotationMatrix
 from differential_ik import DifferentialIK
 
@@ -177,8 +176,8 @@ class EndEffectorTeleop(LeafSystem):
         output.SetAtIndex(4, self.y.get())
         output.SetAtIndex(5, self.z.get())
 
-class ffcontrol(LeafSystem):
-    def __init__(self, plant):
+class VelocityEstimator(LeafSystem):
+    def __init__(self,plant):
         LeafSystem.__init__(self)
         self._plant =  plant
         self.plant_context = plant.CreateDefaultContext()
@@ -188,35 +187,24 @@ class ffcontrol(LeafSystem):
         #print("Plant ", help(plant))
 
         self.input_port = self.DeclareVectorInputPort("iiwa_position_in", BasicVector(7))
-        self.input_port2 = self.DeclareVectorInputPort("cartforce_in", BasicVector(6))
-        self.output_port =self.DeclareVectorOutputPort("torque_commanded", BasicVector(7), self.CopyStateOut1)
-        print("FFCONTROL INIT")
+        self.input_port2 = self.DeclareVectorInputPort("iiwa_qvelocity_in", BasicVector(7))
+        self.DeclarePeriodicEvent(period_sec =1.0/2000,offset_sec=0.010,event=PublishEvent(trigger_type=TriggerType.kPeriodic,callback=self._periodic_update))
 
-    def CopyStateOut1(self,context,output):
-        pos_ = self.input_port.Eval(context)
-        force_ =self.input_port2.Eval(context)
-        plant_context = self._plant.CreateDefaultContext()
-        self._plant.SetPositions(plant_context, pos_)
-        J = self._plant.CalcJacobianSpatialVelocity(plant_context,JacobianWrtVariable.kQDot,self._G.body_frame(),[0,0,0],self._W, self._W)
-        
-        torques  = np.dot(J.T,force_)
-        print("torques ", torques)
-        output.SetFromVector(torques)
-
-#define a plant which will just print the data coming into the input port
-class PrintPlant(LeafSystem):
-    def __init__(self, num_input = 1):
-        LeafSystem.__init__(self)
-        self.set_name('PrintPlant')
-        self.input_port = self.DeclareInputPort(
-            "print_in", PortDataType.kVectorValued, num_input)
-
-        #The periodic event starts at a small offset, so that we already have a couple of message already at the input port 
-        self.DeclarePeriodicEvent(period_sec =1.0/100,offset_sec=0.00,event=PublishEvent(trigger_type=TriggerType.kPeriodic,callback=self._periodic_update))
     def _periodic_update(self, context, event):
-        #read data from the input port
         msg = self.input_port.Eval(context)
-        print(msg)
+        qvel =self.input_port2.Eval(context)
+        plant_context = self._plant.CreateDefaultContext()
+        self._plant.SetPositions(plant_context, msg)
+        J = self._plant.CalcJacobianSpatialVelocity(plant_context,JacobianWrtVariable.kQDot,self._G.body_frame(),[0,0,0],self._W, self._W)
+        #gpos = self._plant.EvalBodyPoseInWorld(plant_context, self._G)
+        #print("Gripper Pos ", gpos.translation())
+        #print("J ", J.T) # jacobian is a 6x7 matrix
+        #jjt = np.dot(J[0] ,J[0].T)
+        #Wext = np.linalg.solve(jjt,  np.dot(J[0],  C[J[1]]))
+        Vext = np.dot(J,qvel)
+        #Wext = np.linalg.solve(J.T,torq)
+        print (Vext)#[3:])
+        #print(torq)
 
 def main():
     builder = DiagramBuilder()
@@ -225,27 +213,14 @@ def main():
     station.Connect()
 
     robot = station.get_controller_plant()
-    params =  DifferentialInverseKinematicsParameters(7,7)
+    params =  DifferentialInverseKinematicsParameters(7,7
+                                                     )
 
-    sliders = SystemSliders(port_size=6,
-                    slider_names=["r", "p", "y","x", "y", "z"], lower_limit=-10,
-                    upper_limit=10, resolution=0.001,
-                    update_period_sec=0.005, title='test',
-                    length=800)
-    slider_sys = builder.AddSystem(sliders)
-    #print_sys = builder.AddSystem(PrintPlant(num_input = 6))
-    print("DONE SLIDES")
-    ff_sys = builder.AddSystem(ffcontrol(station.get_controller_plant())) 
-    print("FFCONTROL DONE")
     time_step = 0.005
     params.set_timestep(time_step)
     #True velocity limits for IIWA14 in radians
     iiwa14_velocity_limits =np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
-    planar = False
-    if(planar):
-        iiwa14_velocity_limits = iiwa14_velocity_limits[1:6:2]
-        params.set_end_effector_velocity_gain([1, 0, 0, 0, 1, 1])   
-
+    
     factor =1.0 #velocity limit factor
     params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
                                          factor*iiwa14_velocity_limits))
@@ -262,11 +237,9 @@ def main():
     builder.Connect(filter.get_output_port(0),
                     differential_ik.GetInputPort("rpy_xyz_desired"))
 
-    builder.Connect(slider_sys.get_output_port(0),ff_sys.GetInputPort("cartforce_in"))  
-    builder.Connect(station.GetOutputPort("iiwa_position_measured"),ff_sys.GetInputPort("iiwa_position_in")) 
-    builder.Connect(ff_sys.GetOutputPort("torque_commanded"), station.GetInputPort("iiwa_feedforward_torque"))     
-    #builder.Connect(slider_sys.get_output_port(0),print_sys.GetInputPort("print_in"))          
-
+    vext_est = builder.AddSystem(VelocityEstimator(robot))
+    builder.Connect(station.GetOutputPort("iiwa_position_measured"), vext_est.GetInputPort("iiwa_position_in"))
+    builder.Connect(station.GetOutputPort("iiwa_velocity_estimated"), vext_est.GetInputPort("iiwa_qvelocity_in"))
     diagram = builder.Build()
     simulator = Simulator(diagram)
 
@@ -276,8 +249,8 @@ def main():
     station_context = diagram.GetMutableSubsystemContext(
         station, simulator.get_mutable_context())
 
-    #station.GetInputPort("iiwa_feedforward_torque").FixValue(
-    #    station_context, np.zeros(7))
+    station.GetInputPort("iiwa_feedforward_torque").FixValue(
+        station_context, np.zeros(7))
 
     #get the initial values from he hardware
     lc.handle()

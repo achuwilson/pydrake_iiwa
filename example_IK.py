@@ -179,6 +179,7 @@ class EndEffectorTeleop(LeafSystem):
 def main():
     builder = DiagramBuilder()
     station = builder.AddSystem(IiwaHardwareInterface())
+    station.Finalize()
     station.Connect()
 
     robot = station.get_controller_plant()

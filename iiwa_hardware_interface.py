@@ -9,7 +9,7 @@ from iiwa_status_receiver import IiwaStatusReceiver
 from iiwa_command_sender import IiwaCommandSender
 from pydrake.systems.framework import BasicVector, LeafSystem
 import pydrake.all
-
+from pydrake.all import AddMultibodyPlantSceneGraph
 import numpy as np
 import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
@@ -17,12 +17,17 @@ import matplotlib as mpl
 mpl.rcParams['figure.dpi'] = 1200
 
 class IiwaHardwareInterface(Diagram):
-    def __init__(self):
+    def __init__(self,scenegraph=None):
         Diagram.__init__(self)
         self.set_name("IiwaHardwareInterface")
         self.lcm = DrakeLcm()
-        self.plant = MultibodyPlant(time_step=0.0)
+        self.plant = MultibodyPlant(time_step=0.005)
+        if(scenegraph):
+            #we should RegisterAsSourceForSceneGraph before adding the SDF/URDF files
+            self.plant.RegisterAsSourceForSceneGraph(scenegraph)
         self.builder = DiagramBuilder()
+        #self.pl= self.builder.AddSystem(self.plant)
+        #self.plant, self.scene_graph = AddMultibodyPlantSceneGraph(self.builder,0.0)
         self.num_joints=7
 
         self.lcm_sys = self.builder.AddSystem(LcmInterfaceSystem(lcm=self.lcm))
@@ -48,12 +53,18 @@ class IiwaHardwareInterface(Diagram):
         self.builder.ExportInput(self.iiwa_command_parser.GetInputPort("position"), "iiwa_position")
         self.builder.ExportInput(self.iiwa_command_parser.GetInputPort("torque"), "iiwa_feedforward_torque")
 
-        self.builder.BuildInto(self)
+        
 
-        Parser(self.plant).AddModelFromFile(FindResourceOrThrow("drake/manipulation/models/iiwa_description/sdf/iiwa14_no_collision.sdf"))
+        #package_map = Parser(self.plant).package_map()
+        #package_map.PopulateFromFolder("/home/acw/works/drake/drake/manipulation/models/iiwa_description/package.xml")
+        Parser(self.plant).AddModelFromFile(FindResourceOrThrow("drake/manipulation/models/iiwa_description/sdf/iiwa14_no_collision.sdf" ),"iiwa")
         self.plant.WeldFrames(self.plant.world_frame(), self.plant.GetFrameByName("iiwa_link_0"))
-        self.plant.Finalize()
+        
+        self.builder.BuildInto(self)
     
+    def Finalize(self):
+        #Finalize the plant after adding 
+        self.plant.Finalize()
     def Connect(self):
         value = AbstractValue.Make(lcmt_iiwa_status())
         old_message_count = 10 # wait until 10 messages received
@@ -72,3 +83,5 @@ class IiwaHardwareInterface(Diagram):
         return self.plant     
 
 
+    #def get_scene_graph(self):
+    #    return self.scene_graph
