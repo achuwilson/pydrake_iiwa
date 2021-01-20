@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+# A simple Kuka IIWA Manipulation station hardware interface
 from pydrake.systems.framework import Diagram,DiagramBuilder
 from pydrake.lcm import DrakeLcm
 from pydrake.all import MultibodyPlant, Parser,FindResourceOrThrow

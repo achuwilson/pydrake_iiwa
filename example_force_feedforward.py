@@ -1,10 +1,10 @@
 #!/usr/bin/python3
-#Control the kuka iiwa end effector position through sliders, while printing  the end effector position
+#Hybrid force-position control
 from pydrake.manipulation.simple_ui import JointSliders
 from pydrake.systems.framework import DiagramBuilder, LeafSystem, BasicVector, PublishEvent, TriggerType
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.primitives import FirstOrderLowPassFilter
-from iiwa_hardware_interface import IiwaHardwareInterface
+from iiwa_manipulation_station import IiwaManipulationStation
 import numpy as np
 import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
@@ -177,12 +177,12 @@ class EndEffectorTeleop(LeafSystem):
         output.SetAtIndex(4, self.y.get())
         output.SetAtIndex(5, self.z.get())
 
-class ffcontrol(LeafSystem):
+class forceControlller(LeafSystem):
     def __init__(self, plant):
         LeafSystem.__init__(self)
         self._plant =  plant
         self.plant_context = plant.CreateDefaultContext()
-        #self._iiwa = plant.GetModelInstanceByName("iiwa")
+        self.set_name('FeedforwardForceController')
         self._G = plant.GetBodyByName("iiwa_link_7")#.body_frame()
         self._W = plant.world_frame()
         #print("Plant ", help(plant))
@@ -200,32 +200,30 @@ class ffcontrol(LeafSystem):
         J = self._plant.CalcJacobianSpatialVelocity(plant_context,JacobianWrtVariable.kQDot,self._G.body_frame(),[0,0,0],self._W, self._W)
         
         torques  = np.dot(J.T,force_)
-        print("torques ", torques)
         output.SetFromVector(torques)
 
-#define a plant which will just print the data coming into the input port
-class PrintPlant(LeafSystem):
-    def __init__(self, num_input = 1):
-        LeafSystem.__init__(self)
-        self.set_name('PrintPlant')
-        self.input_port = self.DeclareInputPort(
-            "print_in", PortDataType.kVectorValued, num_input)
-
-        #The periodic event starts at a small offset, so that we already have a couple of message already at the input port 
-        self.DeclarePeriodicEvent(period_sec =1.0/100,offset_sec=0.00,event=PublishEvent(trigger_type=TriggerType.kPeriodic,callback=self._periodic_update))
-    def _periodic_update(self, context, event):
-        #read data from the input port
-        msg = self.input_port.Eval(context)
-        print(msg)
 
 def main():
     builder = DiagramBuilder()
-    station = builder.AddSystem(IiwaHardwareInterface())
+
+    ########### ADD SYSTEMS ############
+    station = builder.AddSystem(IiwaManipulationStation())
     station.Finalize()
     station.Connect()
-
     robot = station.get_controller_plant()
+    
+    #paramets for the IK solver
     params =  DifferentialInverseKinematicsParameters(7,7)
+    time_step = 0.005
+    params.set_timestep(time_step)
+    #True velocity limits for IIWA14 in radians
+    iiwa14_velocity_limits =np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
+    
+    factor =1.0 #velocity limit factor
+    params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
+                                         factor*iiwa14_velocity_limits))
+    differential_ik = builder.AddSystem(DifferentialIK(robot,
+                robot.GetFrameByName("iiwa_link_7"), params, time_step))
 
     sliders = SystemSliders(port_size=6,
                     slider_names=["r", "p", "y","x", "y", "z"], lower_limit=-10,
@@ -233,68 +231,59 @@ def main():
                     update_period_sec=0.005, title='test',
                     length=800)
     slider_sys = builder.AddSystem(sliders)
-    #print_sys = builder.AddSystem(PrintPlant(num_input = 6))
-    print("DONE SLIDES")
-    ff_sys = builder.AddSystem(ffcontrol(station.get_controller_plant())) 
-    print("FFCONTROL DONE")
-    time_step = 0.005
-    params.set_timestep(time_step)
-    #True velocity limits for IIWA14 in radians
-    iiwa14_velocity_limits =np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
-    planar = False
-    if(planar):
-        iiwa14_velocity_limits = iiwa14_velocity_limits[1:6:2]
-        params.set_end_effector_velocity_gain([1, 0, 0, 0, 1, 1])   
-
-    factor =1.0 #velocity limit factor
-    params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
-                                         factor*iiwa14_velocity_limits))
-    differential_ik = builder.AddSystem(DifferentialIK(robot,
-                robot.GetFrameByName("iiwa_link_7"), params, time_step))
-
-    builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
-                    station.GetInputPort("iiwa_position"))
-
+    controller = builder.AddSystem(forceControlller(robot)) 
     teleop = builder.AddSystem(EndEffectorTeleop(False))
     filter = builder.AddSystem(
         FirstOrderLowPassFilter(time_constant=2.0, size=6))
-    builder.Connect(teleop.get_output_port(0), filter.get_input_port(0))
+
+    ########### CONNECT THE PORTS and BUILD ###########
+    builder.Connect(teleop.get_output_port(0),
+                    filter.get_input_port(0))
     builder.Connect(filter.get_output_port(0),
                     differential_ik.GetInputPort("rpy_xyz_desired"))
-
-    builder.Connect(slider_sys.get_output_port(0),ff_sys.GetInputPort("cartforce_in"))  
-    builder.Connect(station.GetOutputPort("iiwa_position_measured"),ff_sys.GetInputPort("iiwa_position_in")) 
-    builder.Connect(ff_sys.GetOutputPort("torque_commanded"), station.GetInputPort("iiwa_feedforward_torque"))     
-    #builder.Connect(slider_sys.get_output_port(0),print_sys.GetInputPort("print_in"))          
+    builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
+                    station.GetInputPort("iiwa_position"))
+    builder.Connect(slider_sys.get_output_port(0),
+                    controller.GetInputPort("cartforce_in"))  
+    builder.Connect(station.GetOutputPort("iiwa_position_measured"),
+                    controller.GetInputPort("iiwa_position_in")) 
+    builder.Connect(controller.GetOutputPort("torque_commanded"), 
+                    station.GetInputPort("iiwa_feedforward_torque"))
 
     diagram = builder.Build()
     simulator = Simulator(diagram)
 
+    ########### PLOT #############
+    plot_diagram = True
+    if(plot_diagram ==True):
+        img = plot_system_graphviz(diagram)
+        plt.savefig("images/force_ctrl_system.png")
+        plt.show()
+
+    ######### SET INITIAL CONDITIONS ##########
     # This is important to avoid duplicate publishes to the hardware interface:
     simulator.set_publish_every_time_step(False)
 
     station_context = diagram.GetMutableSubsystemContext(
         station, simulator.get_mutable_context())
 
-    #station.GetInputPort("iiwa_feedforward_torque").FixValue(
-    #    station_context, np.zeros(7))
-
     #get the initial values from he hardware
     lc.handle()
     initPos= list(subscription.msg.joint_position_measured)
-    print("InitPos ", initPos)
-
+    
     differential_ik.parameters.set_nominal_joint_position(initPos)
     teleop.SetPose(differential_ik.ForwardKinematics(initPos))
     #set the initial values of the filter output
     filter.set_initial_output_value(
         diagram.GetMutableSubsystemContext(
             filter, simulator.get_mutable_context()),
-                teleop.get_output_port(0).Eval(diagram.GetMutableSubsystemContext(
+                teleop.get_output_port(0).Eval(
+                    diagram.GetMutableSubsystemContext(
                       teleop, simulator.get_mutable_context())))
     differential_ik.SetPositions(diagram.GetMutableSubsystemContext(
         differential_ik, simulator.get_mutable_context()), initPos)                  
     
+    ######## SIMULATE/RUN ################
     simulator.set_target_realtime_rate(1.0)
     simulator.AdvanceTo(np.inf)
 

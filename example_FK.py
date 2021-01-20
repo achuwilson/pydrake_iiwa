@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # Control the kuka iiwa joints through sliders, 
 # while printing out the end effector position
-# using forward kinematics
+# using fo![](images/fk_system.png)rward kinematics
 from pydrake.manipulation.simple_ui import JointSliders
 from pydrake.systems.framework import (DiagramBuilder, 
     LeafSystem, BasicVector, PublishEvent, TriggerType)
@@ -42,7 +42,7 @@ class forwardkin(LeafSystem):
     # position into terminal
     def __init__(self,plant):
         LeafSystem.__init__(self)
-        self.set_name('FKPlant')
+        self.set_name('FKSystem')
         self._plant =  plant
         self.plant_context = plant.CreateDefaultContext()
         #Get the handler for the last link. Replace with gripper/custom 
@@ -105,7 +105,7 @@ def main():
     diagram = builder.Build()
 
     ########### PLOT #############
-    plot_diagram = False
+    plot_diagram = True
     if(plot_diagram ==True):
         img = plot_system_graphviz(diagram)
         plt.savefig("images/fk_system.png")
@@ -136,7 +136,7 @@ def main():
 
     simulator.set_target_realtime_rate(1.0)
 
-    ######## SIMULATE ################
+    ######## SIMULATE/RUN ################
     simulator.AdvanceTo(np.inf)
 
 if __name__ == '__main__':

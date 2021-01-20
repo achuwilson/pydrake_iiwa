@@ -1,10 +1,12 @@
 #!/usr/bin/python3
-#Control the kuka iiwa end effector position through sliders, while printing  the end effector position
+# Control the kuka iiwa end effector position through sliders, 
+# while printing  the end effector velocity
 from pydrake.manipulation.simple_ui import JointSliders
-from pydrake.systems.framework import DiagramBuilder, LeafSystem, BasicVector, PublishEvent, TriggerType
+from pydrake.systems.framework import (DiagramBuilder,
+    LeafSystem, BasicVector, PublishEvent, TriggerType)
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.primitives import FirstOrderLowPassFilter
-from iiwa_hardware_interface import IiwaHardwareInterface
+from iiwa_manipulation_station import IiwaManipulationStation
 import numpy as np
 import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
@@ -15,7 +17,7 @@ from pydrake.math import RigidTransform, RollPitchYaw, RotationMatrix
 from differential_ik import DifferentialIK
 
 import matplotlib as mpl
-mpl.rcParams['figure.dpi'] = 1200    
+mpl.rcParams['figure.dpi'] = 1600    
 import time
 import lcm
 from drake import lcmt_iiwa_status
@@ -179,70 +181,95 @@ class EndEffectorTeleop(LeafSystem):
 class VelocityEstimator(LeafSystem):
     def __init__(self,plant):
         LeafSystem.__init__(self)
+        self.set_name('velocityEstimator')
         self._plant =  plant
         self.plant_context = plant.CreateDefaultContext()
         #self._iiwa = plant.GetModelInstanceByName("iiwa")
-        self._G = plant.GetBodyByName("iiwa_link_7")#.body_frame()
+        self._G = plant.GetBodyByName("iiwa_link_7")
         self._W = plant.world_frame()
-        #print("Plant ", help(plant))
-
-        self.input_port = self.DeclareVectorInputPort("iiwa_position_in", BasicVector(7))
-        self.input_port2 = self.DeclareVectorInputPort("iiwa_qvelocity_in", BasicVector(7))
-        self.DeclarePeriodicEvent(period_sec =1.0/2000,offset_sec=0.010,event=PublishEvent(trigger_type=TriggerType.kPeriodic,callback=self._periodic_update))
+        
+        #Declare the inputs
+        self.input_port = self.DeclareVectorInputPort("iiwa_position_in",
+                                                         BasicVector(7))
+        self.input_port2 = self.DeclareVectorInputPort("iiwa_qvelocity_in",
+                                                         BasicVector(7))
+        #Declare the periodic event, which calls a callback function at 
+        #20hz 
+        self.DeclarePeriodicEvent(period_sec =1.0/20,
+                                  offset_sec=0.010,
+                                  event=PublishEvent(
+                                        trigger_type=TriggerType.kPeriodic,
+                                        callback=self._periodic_update))
 
     def _periodic_update(self, context, event):
+        #evaluate the input ports
         msg = self.input_port.Eval(context)
         qvel =self.input_port2.Eval(context)
         plant_context = self._plant.CreateDefaultContext()
+        #update the joint position values of the multibodyplant
         self._plant.SetPositions(plant_context, msg)
-        J = self._plant.CalcJacobianSpatialVelocity(plant_context,JacobianWrtVariable.kQDot,self._G.body_frame(),[0,0,0],self._W, self._W)
-        #gpos = self._plant.EvalBodyPoseInWorld(plant_context, self._G)
-        #print("Gripper Pos ", gpos.translation())
-        #print("J ", J.T) # jacobian is a 6x7 matrix
-        #jjt = np.dot(J[0] ,J[0].T)
-        #Wext = np.linalg.solve(jjt,  np.dot(J[0],  C[J[1]]))
+        #evaluate the Jacobian
+        J = self._plant.CalcJacobianSpatialVelocity(plant_context,
+                                                    JacobianWrtVariable.kQDot,
+                                                    self._G.body_frame(),
+                                                    [0,0,0],
+                                                    self._W,
+                                                    self._W)
+        #estimate the velocity by multiplying J with joint velocity
         Vext = np.dot(J,qvel)
-        #Wext = np.linalg.solve(J.T,torq)
-        print (Vext)#[3:])
-        #print(torq)
+        # print the X, Y , Z velocities
+        print (Vext[3:])
 
 def main():
     builder = DiagramBuilder()
-    station = builder.AddSystem(IiwaHardwareInterface())
+  
+    ########### ADD SYSTEMS ############
+    station = builder.AddSystem(IiwaManipulationStation())
     station.Finalize()
     station.Connect()
 
     robot = station.get_controller_plant()
-    params =  DifferentialInverseKinematicsParameters(7,7
-                                                     )
-
+    #paramets for the IK solver
+    params =  DifferentialInverseKinematicsParameters(7,7)                                                     
     time_step = 0.005
     params.set_timestep(time_step)
     #True velocity limits for IIWA14 in radians
-    iiwa14_velocity_limits =np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
-    
+    iiwa14_velocity_limits =np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])    
     factor =1.0 #velocity limit factor
     params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
                                          factor*iiwa14_velocity_limits))
     differential_ik = builder.AddSystem(DifferentialIK(robot,
                 robot.GetFrameByName("iiwa_link_7"), params, time_step))
-
-    builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
-                    station.GetInputPort("iiwa_position"))
+    differential_ik.set_name('DifferentialIK')             
 
     teleop = builder.AddSystem(EndEffectorTeleop(False))
     filter = builder.AddSystem(
         FirstOrderLowPassFilter(time_constant=2.0, size=6))
-    builder.Connect(teleop.get_output_port(0), filter.get_input_port(0))
+    vext_est = builder.AddSystem(VelocityEstimator(robot))
+
+    ########### CONNECT THE PORTS and BUILD ###########
+    builder.Connect(teleop.get_output_port(0),
+                    filter.get_input_port(0))
     builder.Connect(filter.get_output_port(0),
                     differential_ik.GetInputPort("rpy_xyz_desired"))
+    builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
+                    station.GetInputPort("iiwa_position"))
+    builder.Connect(station.GetOutputPort("iiwa_position_measured"),
+                    vext_est.GetInputPort("iiwa_position_in"))
+    builder.Connect(station.GetOutputPort("iiwa_velocity_estimated"),
+                    vext_est.GetInputPort("iiwa_qvelocity_in"))
 
-    vext_est = builder.AddSystem(VelocityEstimator(robot))
-    builder.Connect(station.GetOutputPort("iiwa_position_measured"), vext_est.GetInputPort("iiwa_position_in"))
-    builder.Connect(station.GetOutputPort("iiwa_velocity_estimated"), vext_est.GetInputPort("iiwa_qvelocity_in"))
     diagram = builder.Build()
     simulator = Simulator(diagram)
 
+    ########### PLOT #############
+    plot_diagram = False
+    if(plot_diagram ==True):
+        img = plot_system_graphviz(diagram)
+        plt.savefig("images/vel_est_system.png")
+        plt.show()
+
+    ######### SET INITIAL CONDITIONS ##########
     # This is important to avoid duplicate publishes to the hardware interface:
     simulator.set_publish_every_time_step(False)
 
@@ -263,14 +290,16 @@ def main():
     filter.set_initial_output_value(
         diagram.GetMutableSubsystemContext(
             filter, simulator.get_mutable_context()),
-                teleop.get_output_port(0).Eval(diagram.GetMutableSubsystemContext(
+                teleop.get_output_port(0).Eval(
+                    diagram.GetMutableSubsystemContext(
                       teleop, simulator.get_mutable_context())))
+    #set the initial value for the differntial Ik integrator
     differential_ik.SetPositions(diagram.GetMutableSubsystemContext(
-        differential_ik, simulator.get_mutable_context()), initPos)                  
-    
+        differential_ik, simulator.get_mutable_context()), initPos)   
+                       
+    ######## SIMULATE/RUN ################
     simulator.set_target_realtime_rate(1.0)
     simulator.AdvanceTo(np.inf)
-
 
 if __name__ == '__main__':
     main()

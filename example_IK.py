@@ -4,7 +4,7 @@ from pydrake.manipulation.simple_ui import JointSliders
 from pydrake.systems.framework import DiagramBuilder, LeafSystem, BasicVector, PublishEvent, TriggerType
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.primitives import FirstOrderLowPassFilter
-from iiwa_hardware_interface import IiwaHardwareInterface
+from iiwa_manipulation_station import IiwaManipulationStation
 import numpy as np
 import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
@@ -178,42 +178,48 @@ class EndEffectorTeleop(LeafSystem):
 
 def main():
     builder = DiagramBuilder()
-    station = builder.AddSystem(IiwaHardwareInterface())
+    ########### ADD SYSTEMS ############
+    station = builder.AddSystem(IiwaManipulationStation())
     station.Finalize()
     station.Connect()
 
     robot = station.get_controller_plant()
-    params =  DifferentialInverseKinematicsParameters(7,7
-                                                     )
-
+    params =  DifferentialInverseKinematicsParameters(7,7)
+    #set the parameters for the Differential IK
     time_step = 0.005
     params.set_timestep(time_step)
     #True velocity limits for IIWA14 in radians
     iiwa14_velocity_limits =np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
-    planar = False
-    if(planar):
-        iiwa14_velocity_limits = iiwa14_velocity_limits[1:6:2]
-        params.set_end_effector_velocity_gain([1, 0, 0, 0, 1, 1])   
-
+ 
     factor =1.0 #velocity limit factor
     params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
                                          factor*iiwa14_velocity_limits))
     differential_ik = builder.AddSystem(DifferentialIK(robot,
                 robot.GetFrameByName("iiwa_link_7"), params, time_step))
-
-    builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
-                    station.GetInputPort("iiwa_position"))
-
+    differential_ik.set_name('DifferentialIK')            
+    #Add the GUI sliders
     teleop = builder.AddSystem(EndEffectorTeleop(False))
     filter = builder.AddSystem(
         FirstOrderLowPassFilter(time_constant=2.0, size=6))
+    
+
+    ########### CONNECT THE PORTS and BUILD ###########
     builder.Connect(teleop.get_output_port(0), filter.get_input_port(0))
     builder.Connect(filter.get_output_port(0),
                     differential_ik.GetInputPort("rpy_xyz_desired"))
-
+    builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
+                    station.GetInputPort("iiwa_position"))
     diagram = builder.Build()
     simulator = Simulator(diagram)
 
+    ########### PLOT #############
+    plot_diagram = False
+    if(plot_diagram ==True):
+        img = plot_system_graphviz(diagram)
+        plt.savefig("images/ik_system.png")
+        plt.show()
+
+    ######### SET INITIAL CONDITIONS ##########
     # This is important to avoid duplicate publishes to the hardware interface:
     simulator.set_publish_every_time_step(False)
 
@@ -226,7 +232,6 @@ def main():
     #get the initial values from he hardware
     lc.handle()
     initPos= list(subscription.msg.joint_position_measured)
-    print("InitPos ", initPos)
 
     differential_ik.parameters.set_nominal_joint_position(initPos)
     teleop.SetPose(differential_ik.ForwardKinematics(initPos))
@@ -236,12 +241,13 @@ def main():
             filter, simulator.get_mutable_context()),
                 teleop.get_output_port(0).Eval(diagram.GetMutableSubsystemContext(
                       teleop, simulator.get_mutable_context())))
+    #set the initial value for the differntial Ik integrator
     differential_ik.SetPositions(diagram.GetMutableSubsystemContext(
         differential_ik, simulator.get_mutable_context()), initPos)                  
     
     simulator.set_target_realtime_rate(1.0)
+    ######## SIMULATE/RUN ################
     simulator.AdvanceTo(np.inf)
-
 
 if __name__ == '__main__':
     main()

@@ -2,10 +2,11 @@
 #Control the kuka iiwa end effector velocity through sliders
 #NOTE : be extremely carefull when running this code
 from pydrake.manipulation.simple_ui import JointSliders
-from pydrake.systems.framework import DiagramBuilder, LeafSystem, BasicVector, PublishEvent, TriggerType
+from pydrake.systems.framework import(DiagramBuilder,
+     LeafSystem, BasicVector, PublishEvent, TriggerType)
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.primitives import FirstOrderLowPassFilter
-from iiwa_hardware_interface import IiwaHardwareInterface
+from iiwa_manipulation_station import IiwaManipulationStation
 import numpy as np
 import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
@@ -42,11 +43,13 @@ class PsuedoInverseVelocityController(LeafSystem):
     ''' A Jacobian Psuedo Inverse based velocity controller
 
         Initialize with the multibodyplant, provide the current joint position
-        and the desired end effector velocity 
+        and the desired end effector velocity. It woudl then output required
+        joint velocities
 
     ''' 
     def __init__(self,plant):
         LeafSystem.__init__(self)
+        self.set_name('PsuedoInverseVelocityController')
         self._plant =  plant
         self.plant_context = plant.CreateDefaultContext()
         
@@ -86,7 +89,7 @@ def main():
     builder = DiagramBuilder()
 
     ######## ADD SYSTEMS #############
-    station = builder.AddSystem(IiwaHardwareInterface())
+    station = builder.AddSystem(IiwaManipulationStation())
     station.Finalize()
     station.Connect()
 
@@ -120,6 +123,13 @@ def main():
     ######### BUILD ############
     diagram = builder.Build()
     simulator = Simulator(diagram)
+    
+    ########### PLOT #############
+    plot_diagram = True
+    if(plot_diagram ==True):
+        img = plot_system_graphviz(diagram)
+        plt.savefig("images/vel_ctrl_system.png")
+        plt.show()
 
     ######### SET INTIAL CONDITIONS/PARAMETERS ###########
     # This is important to avoid duplicate publishes to the hardware interface:
@@ -140,9 +150,10 @@ def main():
     #The values computed by the PseudoInVerseVelocityController 
     #will be added to the initial value of the integrator.So set 
     # it as the initial pose of the controller 
-    integrator.GetMyContextFromRoot(simulator.get_mutable_context())
-                                .get_mutable_continuous_state_vector()
-                                    .SetFromVector(initPos)
+    integrator.GetMyContextFromRoot(
+        simulator.get_mutable_context(
+                    )).get_mutable_continuous_state_vector(
+                                                ).SetFromVector(initPos)
 
     simulator.set_target_realtime_rate(1.0)
 
