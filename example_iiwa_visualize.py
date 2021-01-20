@@ -195,7 +195,7 @@ def main():
 
     ########### ADD SYSTEMS ############
     scene_graph = builder.AddSystem(SceneGraph())
-    # Initialize the IiwaManipulationStation with scenegraph to use  GUI
+    # Initialize the IiwaManipulationStation with scenegraph to use GUI
     station = builder.AddSystem(IiwaManipulationStation(scene_graph))
     robot = station.get_controller_plant()
     station.Finalize()
@@ -241,7 +241,7 @@ def main():
     simulator = Simulator(diagram)
 
    ########### PLOT #############
-    plot_diagram = True
+    plot_diagram = False
     if(plot_diagram ==True):
         img = plot_system_graphviz(diagram)
         plt.savefig("images/visualize_system.png")

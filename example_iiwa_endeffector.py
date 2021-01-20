@@ -1,10 +1,11 @@
 #!/usr/bin/python3
-#Control the kuka iiwa end effector position through sliders, while printing  the end effector position
+# Add a custom end effector
 from pydrake.manipulation.simple_ui import JointSliders
-from pydrake.systems.framework import DiagramBuilder, LeafSystem, BasicVector, PublishEvent, TriggerType
+from pydrake.systems.framework import( DiagramBuilder, LeafSystem,
+            BasicVector, PublishEvent, TriggerType)
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.primitives import FirstOrderLowPassFilter
-from iiwa_hardware_interface import IiwaHardwareInterface
+from iiwa_manipulation_station import IiwaManipulationStation
 import numpy as np
 import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
@@ -16,7 +17,8 @@ from pydrake.systems.planar_scenegraph_visualizer import (
     PlanarSceneGraphVisualizer
 )
 from pydrake.systems.rendering import MultibodyPositionToGeometryPose
-from pydrake.all import Parser, FindResourceOrThrow, RigidTransform,RollPitchYaw,ConnectMeshcatVisualizer
+from pydrake.all import( Parser, FindResourceOrThrow, RigidTransform,
+    RollPitchYaw,ConnectMeshcatVisualizer)
 from pydrake.math import RigidTransform, RollPitchYaw, RotationMatrix
 from differential_ik import DifferentialIK
 
@@ -184,75 +186,73 @@ class EndEffectorTeleop(LeafSystem):
 
 def main():
     builder = DiagramBuilder()
+
+    ########### ADD SYSTEMS ############
     scene_graph = builder.AddSystem(SceneGraph())
-    station = builder.AddSystem(IiwaHardwareInterface(scene_graph))
+    # Initialize the IiwaManipulationStation with scenegraph to use GUI
+    station = builder.AddSystem(IiwaManipulationStation(scene_graph))
     robot = station.get_controller_plant()
+
+    # add the URDF model of the end effector to the MultibodyPlant
     finger = Parser(robot).AddModelFromFile("models/onefinger.urdf", "simplefinger")
+    # compute the transform between the base of finger and iiwa_link_7
     X_7G = RigidTransform(RollPitchYaw(0, 0, 0), [0, 0, 0.045])
-    robot.WeldFrames(robot.GetFrameByName("iiwa_link_7"),robot.GetFrameByName("finger_base", finger), X_7G)
+    #fix the finger to the iiwa_link_7
+    robot.WeldFrames(robot.GetFrameByName("iiwa_link_7")
+                    ,robot.GetFrameByName("finger_base", finger),
+                     X_7G)
     station.Finalize()
-    
     station.Connect()
 
     
-    params =  DifferentialInverseKinematicsParameters(7,7
-                                                     )
-
+    #parameters for the IK solver
+    params =  DifferentialInverseKinematicsParameters(7,7)
     time_step = 0.005
     params.set_timestep(time_step)
     #True velocity limits for IIWA14 in radians
     iiwa14_velocity_limits =np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
-    planar = False
-    if(planar):
-        iiwa14_velocity_limits = iiwa14_velocity_limits[1:6:2]
-        params.set_end_effector_velocity_gain([1, 0, 0, 0, 1, 1])   
-
     factor =1.0 #velocity limit factor
     params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
                                          factor*iiwa14_velocity_limits))
+    # THIS IS IMPORTANT, we set the end effector as the tip of finger
     differential_ik = builder.AddSystem(DifferentialIK(robot,
                 robot.GetFrameByName("tip"), params, time_step))
-
-    builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
-                    station.GetInputPort("iiwa_position"))
 
     teleop = builder.AddSystem(EndEffectorTeleop(False))
     filter = builder.AddSystem(
         FirstOrderLowPassFilter(time_constant=2.0, size=6))
-    builder.Connect(teleop.get_output_port(0), filter.get_input_port(0))
-    builder.Connect(filter.get_output_port(0),
-                    differential_ik.GetInputPort("rpy_xyz_desired"))
-
-
     to_pose = builder.AddSystem(MultibodyPositionToGeometryPose(robot))
-    builder.Connect(station.GetOutputPort("iiwa_position_measured"), to_pose.get_input_port())
-    
-    print("GET SOURCE ID ", robot.get_source_id())
-    builder.Connect(
-        to_pose.get_output_port(),
-        scene_graph.get_source_pose_port(robot.get_source_id()))
-
-   
-
-    DrakeVisualizer.AddToBuilder(builder=builder, scene_graph=scene_graph)
-    #frames_td= {"iiwa": {"iiwa_link_1", "iiwa_link_2", "iiwa_link_3", "iiwa_link_4", "iiwa_link_5", "iiwa_link_6", "iiwa_link_7"}}
+    #Add the Meshcat visualizer. Make sure that meshcat-server is running    
     meshcat_viz = builder.AddSystem(
             MeshcatVisualizer(scene_graph))
-    builder.Connect(
-            scene_graph.get_query_output_port(),
-            meshcat_viz.get_geometry_query_input_port())
 
+    ########### CONNECT THE PORTS and BUILD ###########
+    builder.Connect(teleop.get_output_port(0), 
+                    filter.get_input_port(0))
+    builder.Connect(filter.get_output_port(0),
+                    differential_ik.GetInputPort("rpy_xyz_desired"))
+    builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
+                    station.GetInputPort("iiwa_position"))
+    builder.Connect(station.GetOutputPort("iiwa_position_measured"),
+                    to_pose.get_input_port())
+    builder.Connect(to_pose.get_output_port(),
+                    scene_graph.get_source_pose_port(robot.get_source_id()))
+    builder.Connect(scene_graph.get_query_output_port(),
+                    meshcat_viz.get_geometry_query_input_port())        
+
+    DrakeVisualizer.AddToBuilder(builder=builder, scene_graph=scene_graph)  
+        
     diagram = builder.Build()
     simulator = Simulator(diagram)
-    
+
+   ########### PLOT #############
     plot_diagram = False
     if(plot_diagram ==True):
         img = plot_system_graphviz(diagram)
-        plt.savefig("system.svg")
-        plt.savefig("system.png")
+        plt.savefig("images/end_effector_system.png")
         plt.show()
     
-
+    ######### SET INITIAL CONDITIONS ##########
     # This is important to avoid duplicate publishes to the hardware interface:
     simulator.set_publish_every_time_step(False)
 
@@ -262,11 +262,9 @@ def main():
     station.GetInputPort("iiwa_feedforward_torque").FixValue(
         station_context, np.zeros(7))
 
-
     #get the initial values from he hardware
     lc.handle()
     initPos= list(subscription.msg.joint_position_measured)
-    print("InitPos ", initPos)
 
     differential_ik.parameters.set_nominal_joint_position(initPos)
     teleop.SetPose(differential_ik.ForwardKinematics(initPos))
@@ -274,11 +272,14 @@ def main():
     filter.set_initial_output_value(
         diagram.GetMutableSubsystemContext(
             filter, simulator.get_mutable_context()),
-                teleop.get_output_port(0).Eval(diagram.GetMutableSubsystemContext(
+                teleop.get_output_port(0).Eval(
+                    diagram.GetMutableSubsystemContext(
                       teleop, simulator.get_mutable_context())))
+    #set the initial value for the differntial Ik integrator
     differential_ik.SetPositions(diagram.GetMutableSubsystemContext(
-        differential_ik, simulator.get_mutable_context()), initPos)                  
-    
+        differential_ik, simulator.get_mutable_context()), initPos)    
+
+    ######## SIMULATE/RUN ################
     simulator.set_target_realtime_rate(1.0)
     simulator.AdvanceTo(np.inf)
 
