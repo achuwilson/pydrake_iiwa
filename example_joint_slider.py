@@ -4,8 +4,9 @@ from pydrake.manipulation.simple_ui import JointSliders
 from pydrake.systems.framework import DiagramBuilder
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.primitives import FirstOrderLowPassFilter
-from iiwa_hardware_interface import IiwaHardwareInterface
+from iiwa_manipulation_station import IiwaManipulationStation
 import numpy as np
+
 import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
 import matplotlib as mpl
@@ -33,6 +34,7 @@ lc.handle()
 def main():
     builder = DiagramBuilder()
 
+    ########### ADD SYSTEMS ############
     station = builder.AddSystem(IiwaHardwareInterface())
     station.Finalize()
     station.Connect()
@@ -43,20 +45,23 @@ def main():
     filter = builder.AddSystem(FirstOrderLowPassFilter(
         time_constant=1.00, size=num_iiwa_joints))
 
+    ########### CONNECT THE PORTS and BUILD ###########
     builder.Connect(teleop.get_output_port(0), 
                             filter.get_input_port(0))
     builder.Connect(filter.get_output_port(0),
                             station.GetInputPort("iiwa_position"))
     
     diagram = builder.Build()
+    simulator = Simulator(diagram)
 
+    ########### PLOT #############
     plot_diagram = False
     if(plot_diagram ==True):
         img = plot_system_graphviz(diagram)
+        plt.savefig("images/jointcontrol.png")
         plt.show()
 
-    simulator = Simulator(diagram)
-
+    ######### SET INITIAL CONDITIONS ##########
     # This is important to avoid duplicate publishes to the hardware interface:
     simulator.set_publish_every_time_step(False)
 
@@ -68,15 +73,16 @@ def main():
 
     #query the initial position from hardware
     lc.handle()
-    initPos= subscription.msg.joint_position_measured
-    print("InitPos ", initPos)
+    initPos= list(subscription.msg.joint_position_measured)
+
     #set the initial values of the filter output
     filter.set_initial_output_value(
         diagram.GetMutableSubsystemContext(
-            filter, simulator.get_mutable_context()), list(initPos))
+            filter, simulator.get_mutable_context()), initPos)
     #set the slider positions such that it matches the hardware        
-    teleop.set_position(list(initPos))
+    teleop.set_position(initPos)
 
+    ######## SIMULATE/RUN ################
     simulator.set_target_realtime_rate(1.0)
     simulator.AdvanceTo(np.inf)
 
