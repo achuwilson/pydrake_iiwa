@@ -18,9 +18,15 @@ class PrintSystem(LeafSystem):
         self.input_port = self.DeclareInputPort(
             "data_in", PortDataType.kVectorValued, num_input)
 
-        #The periodic event starts at a small offset, so that we already have a couple of message already at the input port 
-        self.DeclarePeriodicEvent(period_sec =1.0/100,offset_sec=0.00,event=PublishEvent(trigger_type=TriggerType.kPeriodic,callback=self._periodic_update))
+        #Declare a periodic event that updates at 100Hz
+        self.DeclarePeriodicEvent(period_sec =1.0/100,
+                                 offset_sec=0.00,
+                                 event=PublishEvent(
+                                     trigger_type=TriggerType.kPeriodic,
+                                     callback=self._periodic_update))
+
     def _periodic_update(self, context, event):
+        #the periodic callback function
         #read data from the input port
         msg = self.input_port.Eval(context)
         print(msg)

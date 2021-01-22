@@ -1,46 +1,49 @@
-from pydrake.systems.framework import LeafSystem, PortDataType, BasicVector,PublishEvent
-from pydrake.systems.framework import TriggerType
-from pydrake.systems.all import  AbstractValue
+#A system to parse the IIWA status into various data
+from pydrake.systems.all import(AbstractValue,TriggerType,LeafSystem, 
+    PortDataType, BasicVector,PublishEvent)
 
 #import the LCM message definition
 from drake import lcmt_iiwa_status
 
 class IiwaStatusReceiver(LeafSystem):
+    # parses the IIWA_STATUS LCM message into the following vector valued outputs:
+    # - position_commanded
+    # - position_measured
+    # - velocity_estimated
+    # - torque_commanded
+    # - torque_measured
+    # - torque_external
     def __init__(self ):
         LeafSystem.__init__(self)
         self.set_name('IiwaStatusReceiver')
 
         #Declare the input port
-        #this is actually an abstractinput port, to which the output of LcmSubscriberSystem is connected
-        #Is is the LcmSubscriberSystem that actually subscribes or reads the LCM data
-        self.input_port = self.DeclareAbstractInputPort('lcmt_iiwa_status', AbstractValue.Make(lcmt_iiwa_status))
+        #this is actually an abstractinput port, to which the output of 
+        # LcmSubscriberSystem is connected
+        # It is the LcmSubscriberSystem that actually subscribes or reads
+        # the LCM data
+        self.input_port = self.DeclareAbstractInputPort('lcmt_iiwa_status',
+                                        AbstractValue.Make(lcmt_iiwa_status))
 
         #define the output portsS
-        self.output_port1 = self.DeclareVectorOutputPort("position_commanded", BasicVector(7), self.CopyStateOut1)
-        self.output_port2 = self.DeclareVectorOutputPort("position_measured", BasicVector(7), self.CopyStateOut2)
-        self.output_port3 = self.DeclareVectorOutputPort("velocity_estimated", BasicVector(7), self.CopyStateOut3)
-        self.output_port4 = self.DeclareVectorOutputPort("torque_commanded", BasicVector(7), self.CopyStateOut4)
-        self.output_port5 = self.DeclareVectorOutputPort("torque_measured", BasicVector(7), self.CopyStateOut5)
-        self.output_port6 = self.DeclareVectorOutputPort("torque_external", BasicVector(7), self.CopyStateOut6)
-
-        #declare a periodic event to update the data (at 200 Hz - defualt data rate from kuka_driver)
-        #self.DeclarePeriodicEvent(period_sec =1.0/200,offset_sec=0.00,event=PublishEvent(trigger_type=TriggerType.kPeriodic,callback=self._periodic_update))
-
-    def _periodic_update(self, context, event):
-        #read data from the input port
-        msg = self.input_port.Eval(context)
-        #check for valid data, somehow the initial 2-3 data packets may be 0
-        if(msg.num_joints ==0):
-            pass
-        else:
-            self.output_port1.Eval(context) 
-            self.output_port2.Eval(context)
-            self.output_port3.Eval(context)
-            self.output_port4.Eval(context)
-            self.output_port5.Eval(context)
-            self.output_port6.Eval(context) 
-
-
+        self.output_port1 = self.DeclareVectorOutputPort("position_commanded",
+                                                        BasicVector(7),
+                                                        self.CopyStateOut1)
+        self.output_port2 = self.DeclareVectorOutputPort("position_measured",
+                                                        BasicVector(7),
+                                                        self.CopyStateOut2)
+        self.output_port3 = self.DeclareVectorOutputPort("velocity_estimated", 
+                                                        BasicVector(7),
+                                                        self.CopyStateOut3)
+        self.output_port4 = self.DeclareVectorOutputPort("torque_commanded",
+                                                        BasicVector(7),
+                                                        self.CopyStateOut4)
+        self.output_port5 = self.DeclareVectorOutputPort("torque_measured", 
+                                                        BasicVector(7),
+                                                        self.CopyStateOut5)
+        self.output_port6 = self.DeclareVectorOutputPort("torque_external",
+                                                        BasicVector(7),
+                                                        self.CopyStateOut6)
 
     def CopyStateOut1(self, context, output):
         #get the input port
