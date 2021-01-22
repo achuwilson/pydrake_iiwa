@@ -36,19 +36,11 @@ def my_handler(channel, data):
         msg_cmd.num_torques = 0
         lc.publish("IIWA_COMMAND", msg_cmd.encode())
 
-        #time.sleep(5)
-
-
     print("Received message on channel \"%s\"" % channel)
     #print("   timestamp   = %s" % str(msg.utime))
     print("   forces   = %s" % str(msg.joint_position_measured[6]))
 
-
-
 subscription = lc.subscribe("IIWA_STATUS", my_handler)
-
-
-
 
 try:
     while True:
@@ -56,7 +48,3 @@ try:
 
 except KeyboardInterrupt:
     pass
-
-
-print("ended")
-#lc.unsubscribe(subscription)

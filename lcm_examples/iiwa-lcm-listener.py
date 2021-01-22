@@ -13,6 +13,7 @@ def my_handler(channel, data):
     msg = lcmt_iiwa_status.decode(data)
     #print("Received message on channel \"%s\"" % channel)
     #print("   timestamp   = %s" % str(msg.utime))
+    timestamp = msg.utime
     print("   forces   = %s" % str(msg.joint_torque_measured))
 
 
