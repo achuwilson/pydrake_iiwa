@@ -12,7 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pydrake.systems.drawing import plot_system_graphviz, plot_graphviz
 import matplotlib as mpl
-from pydrake.all import GenerateHtml
+from pydrake.all import GenerateHtml, RollPitchYaw
 mpl.rcParams['figure.dpi'] = 1200    
 import time
 import lcm
@@ -73,7 +73,7 @@ class forwardkin(LeafSystem):
         eepos = self._plant.EvalBodyPoseInWorld(self.plant_context, self._G)
         # print the XYZ translation estimated. The rotation is available 
         # using eepos.rotation() - as rotation matrix
-        print("Gripper Pos ", eepos.translation())
+        print("Gripper Pos ", eepos.translation(), RollPitchYaw(eepos.rotation()).roll_angle(), RollPitchYaw(eepos.rotation()).pitch_angle(), RollPitchYaw(eepos.rotation()).yaw_angle())
 
 
 
