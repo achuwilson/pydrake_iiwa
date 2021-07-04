@@ -35,7 +35,7 @@ def main():
     builder = DiagramBuilder()
 
     ########### ADD SYSTEMS ############
-    station = builder.AddSystem(IiwaHardwareInterface())
+    station = builder.AddSystem(IiwaManipulationStation())
     station.Finalize()
     station.Connect()
     
